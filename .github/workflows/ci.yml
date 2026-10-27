@@ -7,7 +7,6 @@ permissions:
   contents: read
 jobs:
   build:
-    if: github.event.head_commit.message != 'chore: prepare tea import'
     runs-on: ubuntu-latest
     env:
       HUSKY: "0"
@@ -17,7 +16,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run build:cached
       - run: npm run typecheck
       - run: node scripts/verify-tea.mjs
