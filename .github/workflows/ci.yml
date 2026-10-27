@@ -1,0 +1,24 @@
+name: tea
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.event.head_commit.message != 'chore: prepare tea import'
+    runs-on: ubuntu-latest
+    env:
+      HUSKY: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build:cached
+      - run: npm run typecheck
+      - run: node scripts/verify-tea.mjs
+      - run: npx --no-install vitest run src/domain/skillManifest.test.ts tests/conformance/contracts/mcpToolFamilies.test.ts tests/boundary/mcp/serverLifecycleMcp.test.ts
