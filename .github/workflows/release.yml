@@ -1,0 +1,100 @@
+name: Release tea
+
+on:
+  push:
+    branches: [main]
+    paths: [release.json]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tea-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HUSKY: "0"
+      TURBO_TELEMETRY_DISABLED: "1"
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+      tag: ${{ steps.pack.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run build:cached
+      - run: npm run typecheck
+      - run: node scripts/verify-tea.mjs
+      - run: npx --no-install vitest run src/domain/skillManifest.test.ts tests/conformance/contracts/mcpToolFamilies.test.ts tests/boundary/mcp/serverLifecycleMcp.test.ts
+      - name: Install Windows cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y g++-mingw-w64-x86-64
+      - run: npm run build:windows-native
+      - run: npm run verify:windows-native:artifact
+      - id: pack
+        run: npm run release:pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tea-release
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
+
+  verify:
+    needs: package
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          name: tea-release
+          path: release-assets
+      - name: Install the actual archive in a clean directory
+        run: npm install --prefix package-test --no-audit --no-fund ./release-assets/tea-${{ needs.package.outputs.version }}.tgz
+      - name: Verify installed CLI, native component and MCP analysis
+        run: node scripts/verify-tea-release-package.mjs package-test/node_modules/tea
+
+  publish:
+    needs: [package, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tea-release
+          path: release-assets
+      - name: Publish the verified package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TEA_VERSION: ${{ needs.package.outputs.version }}
+          TEA_TAG: ${{ needs.package.outputs.tag }}
+          TEA_COMMIT: ${{ github.sha }}
+        run: |
+          gh release create "$TEA_TAG" \
+            "release-assets/tea-$TEA_VERSION.tgz" \
+            release-assets/SHA256SUMS \
+            --target "$TEA_COMMIT" \
+            --title "tea $TEA_VERSION" \
+            --notes-file release-assets/RELEASE.md \
+            --draft
+          gh release edit "$TEA_TAG" --draft=false --latest
